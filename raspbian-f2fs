@@ -1,0 +1,151 @@
+#!/bin/sh
+
+loopold=/dev/loop5
+newdev=/dev/loop6
+mntold=./old
+mntnew=./new
+
+u()
+{
+echo "-------- UNMOUNT EVERYTHING"
+sudo umount $mntold || true
+sudo umount $mntnew || true
+sudo umount $loopold || true
+sudo umount $newdev || true
+sudo losetup -d $loopold || true
+$file && sudo losetup -d $newdev || true
+echo "-------- UNMOUNT DONE"
+}
+
+set -e
+
+if [ -z "$1" ]; then 
+	echo "syntax: raspian-image.zip [/dev/sdcarddev]"
+	exit 1
+fi
+
+zip="$1"
+imgsrc="${zip}.img"
+imgf2fs="${zip}.f2fs-img"
+
+dev="$2"
+file=true
+if [ ! -z "$dev" ]; then
+	(echo p; echo q) | sudo fdisk "$dev"
+	echo "---- THIS WILL BE WIPED - are you sure (yes) ?"
+	read ans
+	test $ans = "yes" || exit 1
+	file=false
+fi
+
+echo "unzipping"
+# do not unzip if already done
+test -r "$imgsrc" || unzip -p "$zip" > "$imgsrc"
+# copy image if creating new one
+$file && { test -r "$imgf2fs" || cp "$imgsrc" "$imgf2fs"; }
+
+# partition offsets in images
+offset1=$(($(echo p | fdisk "$imgsrc" | grep "${imgsrc}1" | awk '{print $2;}') * 512))
+sect2=$(echo p | fdisk "$imgsrc" | grep "${imgsrc}2" | awk '{print $2;}')
+offset2=$(($sect2 * 512))
+
+u # unmount all
+mkdir -p $mntold
+mkdir -p $mntnew
+
+#######################################
+#### update partition table
+
+if ! $file; then
+	echo "copy partition table"
+	# copy partition tables from old image to $dev
+	sudo dd if=$imgsrc of=$dev bs=512 count=1
+	echo "copy partition table: done"
+	echo "resize partition 2"
+	sudo partprobe $dev
+	# on sdcard, resize partition2 to max
+	cat << EOF | sudo fdisk ${dev}
+p
+d
+2
+n
+p
+2
+$sect2
+
+
+w
+p
+q
+EOF
+	echo "partition 2 resized"
+	sudo partprobe $dev
+	newdev=${dev}2
+fi
+
+#######################################
+#### now dealing with partition 1
+
+if $file; then
+	# mount new partition
+	sudo losetup -o $offset1 $newdev "$imgf2fs"
+	sudo mount $newdev $mntnew
+else
+	# mount old prtition to copy onto sdcard
+	sudo losetup -o $offset1 $loopold "$imgsrc"
+	sudo mount -o ro $loopold $mntold
+	# format sdcard part1
+	sudo mkdosfs ${dev}1
+	# mount sdcard
+	sudo mount ${dev}1 $mntnew
+	# copy
+	echo "rsyncing boot"
+	sudo rsync -a $mntold/ $mntnew/
+	echo "rsync done"
+fi
+
+echo "patching boot"
+[ -f $mntnew/cmdline.txt.old ] || sudo mv $mntnew/cmdline.txt $mntnew/cmdline.txt.old
+sed -e 's/rootfstype=[^ ]*/rootfstype=f2fs/g' < $mntnew/cmdline.txt.old | sudo dd of=$mntnew/cmdline.txt
+
+echo "press enter before unmounting partition 1"
+read junk
+u
+
+#######################################
+#### now dealing with partition 2
+
+$file || newdev=${dev}2
+
+# setup loop devices on images'part2
+sudo losetup -o $offset2 $loopold "$imgsrc"
+$file && sudo losetup -o $offset2 $newdev "$imgf2fs"
+
+# mount old image part2
+sudo mount -o ro "$loopold" $mntold
+
+# create f2fs partition (sdcar or new image) part2
+sudo mkfs.f2fs $newdev
+# mount it
+sudo mount $newdev $mntnew
+# copy
+echo "rsync - may take time"
+sudo rsync -a $mntold/ $mntnew/
+echo "rsync done"
+# update fstab
+sudo mv $mntnew/etc/fstab $mntnew/etc/fstab.old
+sed -e 's/ext4.*/f2fs\tdefaults,noatime,discard\t0 1/g' < $mntnew/etc/fstab.old | sudo dd of=$mntnew/etc/fstab
+# remove resize2fs script
+sudo rm -f $mntnew/etc/*/*resize2fs_once
+# remove swap file default creation
+sudo rm -f $mntnew/etc/rc*/*dphys-swapfile
+
+echo "done with part2"
+echo "you can check parition2 in new/"
+echo "syncing... (will take several minute on sdcard)"
+sync
+echo "press enter before unmounting part2"
+read junk
+u
+
+#######################################
