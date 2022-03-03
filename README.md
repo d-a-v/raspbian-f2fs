@@ -8,8 +8,9 @@ This script takes the .zip image, and either:
 
 In either case it boots, further tests are needed.
 
-NOTE: f2fs cannot be live-resized, so prefer the sdcard method
+NOTE: f2fs cannot be live-resized, so prefer the sdcard method.
+
 When using the image method,
 - default image size is increased by 500MB
 - the package 'f2fs-tools' must be apt-installed
-- once booted: resize.f2fs /   <- "Error: Not available on mounted device!"
+- once booted: resize.f2fs /dev/mmcblk0p2   <- "Error: Not available on mounted device!"
