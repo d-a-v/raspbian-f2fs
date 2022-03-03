@@ -1,5 +1,7 @@
 # Raspberry Pi OS installer on F2FS
 
+Update: [this repository](https://github.com/aarontc/raspbian-f2fs) appears to be more advanced.
+
 last tested on: 2022-01-28-raspios-bullseye-armhf-lite.zip
 
 This script takes the .zip image, and either:
