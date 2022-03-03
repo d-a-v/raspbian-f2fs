@@ -42,7 +42,13 @@ echo "unzipping"
 # do not unzip if already done
 test -r "$imgsrc" || unzip -p "$zip" > "$imgsrc"
 # copy image if creating new one
-$file && { test -r "$imgf2fs" || cp "$imgsrc" "$imgf2fs"; }
+if $file && ! test -r "$imgf2fs"; then
+    cp "$imgsrc" "$imgf2fs"
+    # grow by 500MB to be able to download and install f2fs-tools.deb
+    size=$(stat -c %s "$imgf2fs")
+    bigger=$((size + 500000000))
+    truncate --size $bigger "$imgf2fs"
+fi
 
 # partition offsets in images
 offset1=$(($(echo p | fdisk "$imgsrc" | grep "${imgsrc}1" | awk '{print $2;}') * 512))
@@ -64,7 +70,7 @@ if ! $file; then
 	echo "resize partition 2"
 	sudo partprobe $dev
 	# on sdcard, resize partition2 to max
-	cat << EOF | sudo fdisk ${dev}
+	cat << EOF | sudo fdisk ${dev} || true
 p
 d
 2
@@ -91,7 +97,7 @@ if $file; then
 	sudo losetup -o $offset1 $newdev "$imgf2fs"
 	sudo mount $newdev $mntnew
 else
-	# mount old prtition to copy onto sdcard
+	# mount old partition to copy onto sdcard
 	sudo losetup -o $offset1 $loopold "$imgsrc"
 	sudo mount -o ro $loopold $mntold
 	# format sdcard part1
@@ -105,8 +111,7 @@ else
 fi
 
 echo "patching boot"
-[ -f $mntnew/cmdline.txt.old ] || sudo mv $mntnew/cmdline.txt $mntnew/cmdline.txt.old
-sed -e 's/rootfstype=[^ ]*/rootfstype=f2fs/g' < $mntnew/cmdline.txt.old | sudo dd of=$mntnew/cmdline.txt
+sudo sed -i -e 's/rootfstype=[^ ]*/rootfstype=f2fs/g' $mntnew/cmdline.txt
 
 echo "press enter before unmounting partition 1"
 read junk
@@ -124,8 +129,8 @@ $file && sudo losetup -o $offset2 $newdev "$imgf2fs"
 # mount old image part2
 sudo mount -o ro "$loopold" $mntold
 
-# create f2fs partition (sdcar or new image) part2
-sudo mkfs.f2fs $newdev
+# create f2fs partition (sdcard or new image) part2
+sudo mkfs.f2fs -f $newdev
 # mount it
 sudo mount $newdev $mntnew
 # copy
